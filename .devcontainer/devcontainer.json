@@ -1,0 +1,20 @@
+{
+    "name": "d3qn-traffic-sumo",
+    "build": {
+        "dockerfile": "Dockerfile",
+        "context": ".."
+    },
+    "runArgs": [
+        "--gpus=all",
+        "--device=/dev/dri",
+        "--security-opt=label=disable",
+        "-e",
+        "DISPLAY=${localEnv:DISPLAY}",
+        "-v",
+        "/tmp/.X11-unix:/tmp/.X11-unix:rw"
+    ],
+    "containerEnv": {
+        "SUMO_HOME": "/usr/share/sumo",
+        "NVIDIA_DRIVER_CAPABILITIES": "all"
+    }
+}
