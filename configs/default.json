@@ -1,0 +1,32 @@
+{
+  "observation": {
+    "state_dim": 33,
+    "num_lanes": 8,
+    "max_phases": 8,
+    "max_lane_capacity_veh": 25.0,
+    "max_wait_norm_s": 120.0,
+    "max_green_norm_s": 60.0
+  },
+  "shield": {
+    "delta_time_s": 5,
+    "min_green_s": 10,
+    "yellow_s": 3,
+    "all_red_s": 2,
+    "mask_allow": 0.0,
+    "mask_block": -1000000000.0
+  },
+  "reward": {
+    "w1_queue": 0.25,
+    "w2_delay": 0.25,
+    "w3_starvation": 0.35,
+    "w4_throughput": 0.15,
+    "w_thresh_s": 60.0,
+    "alpha": 2.0,
+    "t_max_per_step": 10.0
+  },
+  "evaluation": {
+    "num_seeds": 50,
+    "seed_start": 1000,
+    "fixed_time_green_s": 30
+  }
+}
