@@ -148,7 +148,7 @@ class TraCIMetricsLogger:
             _population_variance(self._lane_mean_wait_samples)
             if self._lane_mean_wait_samples else 0.0
         )
-        co2_g = self.total_co2_mg / 1_000_000.0
+        co2_g = self.total_co2_mg / 1_000.0
         return {
             "avg_vehicle_delay_s_per_veh": (
                 total_delay / observed_vehicles if observed_vehicles else 0.0
