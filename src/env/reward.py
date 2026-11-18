@@ -2,9 +2,24 @@ import numpy as np
 
 
 class TrafficRewardCalculator:
-    def __init__(self, cfg: dict, use_starvation_reward: bool = True):
+    VALID_MODES = {"starvation", "delay_diff", "queue_diff"}
+
+    def __init__(
+        self,
+        cfg: dict,
+        use_starvation_reward: bool = True,
+        reward_mode: str | None = None,
+    ):
         r_cfg = cfg["reward"]
-        self.use_starvation = use_starvation_reward
+        if reward_mode is None:
+            self.reward_mode = "starvation" if use_starvation_reward else "delay_diff"
+        else:
+            if reward_mode not in self.VALID_MODES:
+                raise ValueError(
+                    f"Invalid reward_mode '{reward_mode}'. Expected one of {self.VALID_MODES}."
+                )
+            self.reward_mode = reward_mode
+
         self.w1 = float(r_cfg["w1_queue"])          # 0.25
         self.w2 = float(r_cfg["w2_delay"])          # 0.25
         self.w3 = float(r_cfg["w3_starvation"])     # 0.35
@@ -13,9 +28,11 @@ class TrafficRewardCalculator:
         self.alpha = float(r_cfg["alpha"])          # 2.0
         self.t_max = float(r_cfg["t_max_per_step"]) # 10.0
         self._prev_total_delay = None
+        self._prev_total_queue = None
 
     def reset(self):
         self._prev_total_delay = None
+        self._prev_total_queue = None
 
     def compute(
         self,
@@ -24,14 +41,22 @@ class TrafficRewardCalculator:
         lane_max_waits_s: np.ndarray,
         step_throughput: float,
     ) -> float:
-        total_delay = float(np.sum(lane_delays_s))
-
-        if not self.use_starvation:
+        if self.reward_mode == "delay_diff":
+            total_delay = float(np.sum(lane_delays_s))
             if self._prev_total_delay is None:
                 self._prev_total_delay = total_delay
                 return 0.0
             reward = (self._prev_total_delay - total_delay) / self.w_thresh
             self._prev_total_delay = total_delay
+            return float(reward)
+
+        if self.reward_mode == "queue_diff":
+            total_queue = float(np.sum(norm_queues))
+            if self._prev_total_queue is None:
+                self._prev_total_queue = total_queue
+                return 0.0
+            reward = self._prev_total_queue - total_queue
+            self._prev_total_queue = total_queue
             return float(reward)
 
         queue_term = self.w1 * float(np.sum(norm_queues))

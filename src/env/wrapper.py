@@ -12,6 +12,7 @@ class SafetyShieldedTrafficEnv(gym.Wrapper):
         cfg: dict,
         use_shield: bool = True,
         use_starvation_reward: bool = True,
+        reward_mode: str | None = None,
         validate_contracts: bool = True,
     ):
         super().__init__(env)
@@ -29,17 +30,10 @@ class SafetyShieldedTrafficEnv(gym.Wrapper):
 
         self.shield = SafetyShield(self.num_actions, cfg, enabled=use_shield)
         self.reward_calc = TrafficRewardCalculator(
-            cfg, use_starvation_reward=use_starvation_reward
-        )
-
-        self.observation_space = gym.spaces.Box(
-            low=0.0, high=10.0, shape=(self.state_dim,), dtype=np.float32
-        )
-        self.action_space = gym.spaces.Discrete(self.num_actions)
-
-        self.current_phase = 0
-        self.elapsed_green_s = 0.0
-        self._prev_lane_vehicles = {}
+            cfg,
+            use_starvation_reward=use_starvation_reward,
+            reward_mode=reward_mode,
+        ) 
 
     def _get_traci(self):
         return self.unwrapped.sumo
