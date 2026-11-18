@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Synthetic 1-hour demand: 600 vehicles/hour per approach, equal by direction. -->
+<routes>
+    <route id="route_ns" edges="n_t t_s"/>
+    <route id="route_nw" edges="n_t t_w"/>
+    <route id="route_ne" edges="n_t t_e"/>
+    <route id="route_we" edges="w_t t_e"/>
+    <route id="route_wn" edges="w_t t_n"/>
+    <route id="route_ws" edges="w_t t_s"/>
+    <route id="route_ew" edges="e_t t_w"/>
+    <route id="route_en" edges="e_t t_n"/>
+    <route id="route_es" edges="e_t t_s"/>
+    <route id="route_sn" edges="s_t t_n"/>
+    <route id="route_se" edges="s_t t_e"/>
+    <route id="route_sw" edges="s_t t_w"/>
+
+    <flow id="n_straight" route="route_ns" begin="0" end="3600" vehsPerHour="400" departLane="best" departSpeed="max"/>
+    <flow id="n_right" route="route_nw" begin="0" end="3600" vehsPerHour="100" departLane="best" departSpeed="max"/>
+    <flow id="n_left" route="route_ne" begin="0" end="3600" vehsPerHour="100" departLane="best" departSpeed="max"/>
+    <flow id="w_straight" route="route_we" begin="0" end="3600" vehsPerHour="400" departLane="best" departSpeed="max"/>
+    <flow id="w_right" route="route_wn" begin="0" end="3600" vehsPerHour="100" departLane="best" departSpeed="max"/>
+    <flow id="w_left" route="route_ws" begin="0" end="3600" vehsPerHour="100" departLane="best" departSpeed="max"/>
+    <flow id="e_straight" route="route_ew" begin="0" end="3600" vehsPerHour="400" departLane="best" departSpeed="max"/>
+    <flow id="e_right" route="route_es" begin="0" end="3600" vehsPerHour="100" departLane="best" departSpeed="max"/>
+    <flow id="e_left" route="route_en" begin="0" end="3600" vehsPerHour="100" departLane="best" departSpeed="max"/>
+    <flow id="s_straight" route="route_sn" begin="0" end="3600" vehsPerHour="400" departLane="best" departSpeed="max"/>
+    <flow id="s_right" route="route_se" begin="0" end="3600" vehsPerHour="100" departLane="best" departSpeed="max"/>
+    <flow id="s_left" route="route_sw" begin="0" end="3600" vehsPerHour="100" departLane="best" departSpeed="max"/>
+</routes>
