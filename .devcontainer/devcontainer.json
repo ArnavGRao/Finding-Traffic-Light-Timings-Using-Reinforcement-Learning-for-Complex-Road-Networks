@@ -16,5 +16,6 @@
     "containerEnv": {
         "SUMO_HOME": "/usr/share/sumo",
         "NVIDIA_DRIVER_CAPABILITIES": "all"
-    }
+    },
+    "postCreateCommand": "git config --global --add safe.directory '${containerWorkspaceFolder}'"
 }
