@@ -121,9 +121,9 @@ NETWORK_SPECS: dict[str, dict[str, Any]] = {
         "net_file": "networks/resco_4x4/grid4x4.net.xml",
         "single_agent": False,
         "routes": {
-            "balanced": "networks/resco_4x4/grid4x4_1.rou.xml",
-            "asymmetric": "networks/resco_4x4/grid4x4_1.rou.xml",
-            "tidal": "networks/resco_4x4/grid4x4_1.rou.xml",
+            "balanced": "networks/resco_4x4/demand_balanced_symmetric.rou.xml",
+            "asymmetric": "networks/resco_4x4/demand_asymmetric_peak_arterial.rou.xml",
+            "tidal": "networks/resco_4x4/demand_stepwise_tidal.rou.xml",
         },
     },
 }

@@ -133,18 +133,22 @@ _CONTROLLER_ALIASES: dict[str, str] = {
     "model_a": "d3qn_a",
     "model-a": "d3qn_a",
     "d3qn-a": "d3qn_a",
+    "d3qn_base": "d3qn_a",
     "a": "d3qn_a",
     "model_b": "d3qn_b",
     "model-b": "d3qn_b",
     "d3qn-b": "d3qn_b",
+    "d3qn_shield": "d3qn_b",
     "b": "d3qn_b",
     "model_c": "d3qn_c",
     "model-c": "d3qn_c",
     "d3qn-c": "d3qn_c",
+    "d3qn_starvation": "d3qn_c",
     "c": "d3qn_c",
     "model_d": "d3qn_d",
     "model-d": "d3qn_d",
     "d3qn-d": "d3qn_d",
+    "d3qn_proposed": "d3qn_d",
     "d": "d3qn_d",
 }
 
@@ -413,7 +417,20 @@ def _checkpoint_matches_spec(path: Path, spec: ControllerSpec) -> bool:
         return "vanilla" in stem or "vdqn" in stem or ("dqn" in stem and "d3qn" not in stem)
     if spec.ablation_tag:
         tag = spec.ablation_tag.lower()
-        tokens = (f"model_{tag}", f"model-{tag}", f"d3qn_{tag}", f"d3qn-{tag}", f"ablation_{tag}")
+        extra_by_tag = {
+            "a": ("d3qn_base", "d3qn-base"),
+            "b": ("d3qn_shield", "d3qn-shield"),
+            "c": ("d3qn_starvation", "d3qn-starvation"),
+            "d": ("d3qn_proposed", "d3qn-proposed"),
+        }
+        tokens = (
+            f"model_{tag}",
+            f"model-{tag}",
+            f"d3qn_{tag}",
+            f"d3qn-{tag}",
+            f"ablation_{tag}",
+            *extra_by_tag.get(tag, ()),
+        )
         return any(tok in stem for tok in tokens)
     return False
 
@@ -575,13 +592,19 @@ def make_traffic_env(
     num_seconds: int = 3600,
     delta_time_s: int | None = None,
     validate_contracts: bool = True,
+    single_agent: bool | None = None,
 ) -> SafetyShieldedTrafficEnv:
     """Create a headless SafetyShieldedTrafficEnv configured with matching shield/reward flags."""
     dt = int(delta_time_s if delta_time_s is not None else cfg["shield"]["delta_time_s"])
+    resolved_single = (
+        bool(single_agent)
+        if single_agent is not None
+        else ("grid4x4" not in Path(net_file).name.lower())
+    )
     base_env = sumo_rl.SumoEnvironment(
         net_file=str(net_file),
         route_file=str(route_file),
-        single_agent=True,
+        single_agent=resolved_single,
         use_gui=False,
         num_seconds=int(num_seconds),
         delta_time=dt,

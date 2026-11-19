@@ -458,10 +458,11 @@ class LiveRolloutSession:
                 validate_contracts=True,
             )
             self.obs, self.info = self.env.reset(seed=self.seed)
-            self.recorder.reset(episode=1, initial_info=self.info)
+            initial_info = self.info[self.env.ts_id] if self.env.is_multi_agent else self.info
+            self.recorder.reset(episode=1, initial_info=initial_info)
             self.controller = build_controller(
                 controller_key=self.controller_key,
-                num_actions=self.env.action_space.n,
+                num_actions=self.env.num_actions_map[self.env.ts_id],
                 cfg=self.cfg,
                 checkpoint_path=self.checkpoint_path,
                 allow_untrained=allow_untrained,
@@ -488,13 +489,23 @@ class LiveRolloutSession:
             for _ in range(max(1, int(num_steps))):
                 if self.done or self.env is None:
                     break
-                action = self.controller.select_action(self.obs, self.info, self.env)
-                obs, reward, terminated, truncated, info = self.env.step(action)
-                self.recorder.record_step(info=info, reward=reward, episode=1)
+                if self.env.is_multi_agent:
+                    action_map = {
+                        tid: self.controller.select_action(self.obs[tid], self.info[tid], self.env)
+                        for tid in self.env.ts_ids
+                    }
+                    obs, reward, terminated, truncated, info = self.env.step(action_map)
+                    focal_tid = self.env.ts_id
+                    self.recorder.record_step(info=info[focal_tid], reward=float(reward[focal_tid]), episode=1)
+                    self.done = bool(terminated["__all__"] or truncated["__all__"])
+                else:
+                    action = self.controller.select_action(self.obs, self.info, self.env)
+                    obs, reward, terminated, truncated, info = self.env.step(action)
+                    self.recorder.record_step(info=info, reward=reward, episode=1)
+                    self.done = bool(terminated or truncated)
                 self.obs = obs
                 self.info = info
                 steps_taken += 1
-                self.done = bool(terminated or truncated)
                 if self.done:
                     self.is_running = False
                     self.is_paused = False

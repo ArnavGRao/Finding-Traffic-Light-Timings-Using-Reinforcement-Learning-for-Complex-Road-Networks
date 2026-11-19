@@ -629,19 +629,23 @@ def main() -> None:
                 else Path("networks/single_intersection/single-intersection.net.xml")
             )
 
+            ordered_routes = (
+                [p for p in route_files if p.parent == net_file.parent]
+                + [p for p in route_files if p.parent != net_file.parent]
+            )
             default_route_idx = next(
-                (i for i, p in enumerate(route_files) if "vhvh" in p.name),
+                (i for i, p in enumerate(ordered_routes) if "demand_balanced_symmetric" in p.name or "vhvh" in p.name),
                 0,
             )
             route_file = (
                 st.selectbox(
                     "Demand Route File",
-                    options=route_files,
-                    index=default_route_idx if route_files else 0,
-                    format_func=lambda p: p.name,
+                    options=ordered_routes,
+                    index=default_route_idx if ordered_routes else 0,
+                    format_func=lambda p: f"{p.parent.name}/{p.name}",
                     key="live_route_select",
                 )
-                if route_files
+                if ordered_routes
                 else Path("networks/single_intersection/single-intersection-vhvh.rou.xml")
             )
 

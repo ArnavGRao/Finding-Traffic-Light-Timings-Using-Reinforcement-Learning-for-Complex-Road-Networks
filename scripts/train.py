@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import argparse
+import shutil
 import sys
+import tempfile
 import time
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import torch
@@ -15,11 +18,13 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from src.utils.contracts import EPISODE_SUMMARY_COLUMNS, load_default_config
+from src.utils.demand_generator import generate_random_demand_route
 from src.utils.experiment import (
     DEMAND_CHOICES,
     MODEL_CHOICES,
     MODEL_CONFIGS,
     NETWORK_CHOICES,
+    ModelConfig,
     append_csv_row,
     build_controller_or_agent,
     build_eval_row,
@@ -50,17 +55,46 @@ TRAINING_CURVE_COLUMNS = [
     "wall_time_s",
 ]
 
+VALIDATION_CURVE_COLUMNS = [
+    "episode",
+    "global_step",
+    "val_seed",
+    "val_score",
+    "balanced_reward",
+    "balanced_delay_s",
+    "balanced_max_wait_s",
+    "asymmetric_reward",
+    "asymmetric_delay_s",
+    "asymmetric_max_wait_s",
+    "tidal_reward",
+    "tidal_delay_s",
+    "tidal_max_wait_s",
+    "is_best",
+]
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Train traffic signal control models and save per-episode artifacts.")
     parser.add_argument("--model", type=str, default="d3qn_proposed", choices=MODEL_CHOICES)
     parser.add_argument("--network", type=str, default="single_intersection", choices=NETWORK_CHOICES)
-    parser.add_argument("--demand", type=str, default="balanced", choices=DEMAND_CHOICES)
+    parser.add_argument("--demand", type=str, default="balanced", choices=[*DEMAND_CHOICES, "mixed"])
     parser.add_argument("--episodes", type=int, default=50)
     parser.add_argument("--output-dir", type=str, default="outputs/runs")
     parser.add_argument("--checkpoint", type=str, default=None, help="Optional .pt checkpoint to resume training from.")
     parser.add_argument("--resume", action="store_true", help="Resume from <output-dir>/<run>/latest.pt if present.")
     parser.add_argument("--checkpoint-every", type=int, default=1, help="Save periodic ep_XXXX.pt every N episodes.")
+    parser.add_argument(
+        "--eval-every",
+        type=int,
+        default=5,
+        help="Episode interval for cross-regime validation to update best.pt during mixed training.",
+    )
+    parser.add_argument(
+        "--val-seed",
+        type=int,
+        default=999,
+        help="Fixed validation seed kept separate from training seeds and held-out test seeds (1000..1049).",
+    )
     parser.add_argument("--config", type=str, default=str(REPO_ROOT / "configs/default.json"))
     parser.add_argument("--route-file", type=str, default=None, help="Optional custom SUMO .rou.xml override.")
     parser.add_argument("--num-seconds", type=int, default=3600)
@@ -77,6 +111,61 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def _run_cross_regime_validation(
+    *,
+    cfg: dict[str, Any],
+    model_cfg: ModelConfig,
+    controller: Any,
+    network: str,
+    num_seconds: int,
+    val_seed: int,
+) -> tuple[float, dict[str, dict[str, float]]]:
+    """Run deterministic validation across balanced, asymmetric, and tidal regimes."""
+    was_training = bool(getattr(controller, "online_net", None) and controller.online_net.training)
+    saved_step_count = getattr(controller, "step_count", None)
+    if hasattr(controller, "online_net"):
+        controller.online_net.eval()
+
+    regime_stats: dict[str, dict[str, float]] = {}
+    try:
+        for regime in DEMAND_CHOICES:
+            val_env = build_experiment_env(
+                cfg=cfg,
+                model_cfg=model_cfg,
+                network=network,
+                demand=regime,
+                num_seconds=num_seconds,
+                use_gui=False,
+                validate_contracts=False,
+            )
+            try:
+                res = run_episode(
+                    env=val_env,
+                    controller=controller,
+                    model_cfg=model_cfg,
+                    seed=val_seed,
+                    train=False,
+                    episode_idx=1,
+                )
+            finally:
+                val_env.close()
+
+            summary = res["metrics_summary"]
+            regime_stats[regime] = {
+                "reward": float(res["total_reward"]),
+                "delay_s": float(summary["avg_vehicle_delay_s_per_veh"]),
+                "max_wait_s": float(summary["max_lane_wait_s"]),
+            }
+    finally:
+        if saved_step_count is not None:
+            controller.step_count = saved_step_count
+        if hasattr(controller, "online_net") and was_training:
+            controller.online_net.train()
+
+    val_score = float(np.mean([regime_stats[r]["reward"] for r in DEMAND_CHOICES]))
+    return val_score, regime_stats
+
+
 def main() -> None:
     args = parse_args()
     np.random.seed(args.seed)
@@ -85,6 +174,7 @@ def main() -> None:
     cfg = load_default_config(args.config)
     model_cfg = MODEL_CONFIGS[args.model]
     is_rl = model_cfg.kind in ("vanilla_dqn", "d3qn")
+    is_mixed = args.demand == "mixed"
 
     run_dir = Path(args.output_dir) / f"{args.model}_{args.network}_{args.demand}"
     ckpt_dir = run_dir / "checkpoints"
@@ -96,20 +186,26 @@ def main() -> None:
     best_ckpt = run_dir / "best.pt"
     curve_csv = run_dir / "training_curve.csv"
     eval_rows_csv = run_dir / "per_seed_eval.csv"
+    val_curve_csv = run_dir / "validation_curve.csv"
 
+    tmp_dir: Path | None = Path(tempfile.mkdtemp(prefix="sumo_mixed_")) if is_mixed else None
     env = build_experiment_env(
         cfg=cfg,
         model_cfg=model_cfg,
         network=args.network,
-        demand=args.demand,
+        demand="balanced" if is_mixed else args.demand,
         num_seconds=args.num_seconds,
-        route_file_override=args.route_file,
+        route_file_override=None if is_mixed else args.route_file,
         use_gui=args.gui,
         validate_contracts=False,
     )
 
     try:
         num_actions = env.num_actions_map[env.ts_id]
+        if is_mixed:
+            env.close()
+            env = None
+
         controller = build_controller_or_agent(
             model_cfg,
             num_actions=num_actions,
@@ -140,12 +236,40 @@ def main() -> None:
             best_reward = meta["best_reward"]
             print(
                 f"Resumed {args.model} ({args.network}/{args.demand}) from {resume_path} "
-                f"at episode={start_ep}, global_step={global_step}"
+                f"at episode={start_ep}, global_step={global_step}",
+                flush=True,
             )
 
         for ep in range(start_ep, args.episodes):
             t0 = time.time()
             ep_seed = args.seed + ep
+            tmp_route_path: Path | None = None
+            ep_demand_tag = args.demand
+
+            if is_mixed:
+                assert tmp_dir is not None
+                tmp_route_path = tmp_dir / f"ep_{ep + 1:04d}_seed{ep_seed}.rou.xml"
+                gen_meta = generate_random_demand_route(
+                    network=args.network,
+                    output_path=tmp_route_path,
+                    seed=ep_seed,
+                    num_seconds=args.num_seconds,
+                )
+                ep_demand_tag = f"mixed:{gen_meta['archetype']}"
+                if env is not None:
+                    env.close()
+                env = build_experiment_env(
+                    cfg=cfg,
+                    model_cfg=model_cfg,
+                    network=args.network,
+                    demand="balanced",
+                    num_seconds=args.num_seconds,
+                    route_file_override=str(tmp_route_path),
+                    use_gui=args.gui,
+                    validate_contracts=False,
+                )
+
+            assert env is not None
             result = run_episode(
                 env=env,
                 controller=controller,
@@ -159,38 +283,74 @@ def main() -> None:
                 eps_decay_steps=args.eps_decay_steps,
                 episode_idx=ep + 1,
             )
+
+            if is_mixed:
+                env.close()
+                env = None
+                if tmp_route_path is not None:
+                    tmp_route_path.unlink(missing_ok=True)
+
             wall_s = time.time() - t0
             global_step = result["global_step"]
             ep_reward = result["total_reward"]
             summary = result["metrics_summary"]
 
             if is_rl:
-                if ep_reward >= best_reward:
+                save_best = False
+                if is_mixed:
+                    should_validate = (
+                        args.eval_every > 0 and (ep + 1) % args.eval_every == 0
+                    ) or ((ep + 1) == args.episodes)
+                    if should_validate:
+                        val_score, val_stats = _run_cross_regime_validation(
+                            cfg=cfg,
+                            model_cfg=model_cfg,
+                            controller=controller,
+                            network=args.network,
+                            num_seconds=args.num_seconds,
+                            val_seed=args.val_seed,
+                        )
+                        is_best = val_score >= best_reward
+                        if is_best:
+                            best_reward = val_score
+                            save_best = True
+                        val_row = {
+                            "episode": ep + 1,
+                            "global_step": global_step,
+                            "val_seed": args.val_seed,
+                            "val_score": round(val_score, 5),
+                            "balanced_reward": round(val_stats["balanced"]["reward"], 5),
+                            "balanced_delay_s": round(val_stats["balanced"]["delay_s"], 4),
+                            "balanced_max_wait_s": round(val_stats["balanced"]["max_wait_s"], 4),
+                            "asymmetric_reward": round(val_stats["asymmetric"]["reward"], 5),
+                            "asymmetric_delay_s": round(val_stats["asymmetric"]["delay_s"], 4),
+                            "asymmetric_max_wait_s": round(val_stats["asymmetric"]["max_wait_s"], 4),
+                            "tidal_reward": round(val_stats["tidal"]["reward"], 5),
+                            "tidal_delay_s": round(val_stats["tidal"]["delay_s"], 4),
+                            "tidal_max_wait_s": round(val_stats["tidal"]["max_wait_s"], 4),
+                            "is_best": int(is_best),
+                        }
+                        append_csv_row(val_curve_csv, VALIDATION_CURVE_COLUMNS, val_row)
+                        print(
+                            f"[Val Ep {ep + 1:03d}] {args.model} ({args.network}) | "
+                            f"val_score={val_score:8.2f} | "
+                            f"bal={val_stats['balanced']['delay_s']:.1f}s | "
+                            f"asym={val_stats['asymmetric']['delay_s']:.1f}s | "
+                            f"tidal={val_stats['tidal']['delay_s']:.1f}s | best={is_best}",
+                            flush=True,
+                        )
+                elif ep_reward >= best_reward:
                     best_reward = ep_reward
-                    save_agent_checkpoint(
-                        best_ckpt,
-                        controller,
-                        model_cfg,
-                        args.network,
-                        args.demand,
-                        ep,
-                        global_step,
-                        best_reward,
-                    )
-                save_agent_checkpoint(
-                    latest_ckpt,
-                    controller,
-                    model_cfg,
-                    args.network,
-                    args.demand,
-                    ep,
-                    global_step,
-                    best_reward,
-                )
+                    save_best = True
+
+                save_targets = [latest_ckpt]
+                if save_best:
+                    save_targets.append(best_ckpt)
                 if args.checkpoint_every > 0 and ((ep + 1) % args.checkpoint_every == 0 or (ep + 1) == args.episodes):
-                    periodic_ckpt = ckpt_dir / f"ep_{ep + 1:04d}.pt"
+                    save_targets.append(ckpt_dir / f"ep_{ep + 1:04d}.pt")
+                for ckpt_target in save_targets:
                     save_agent_checkpoint(
-                        periodic_ckpt,
+                        ckpt_target,
                         controller,
                         model_cfg,
                         args.network,
@@ -204,7 +364,7 @@ def main() -> None:
                 "episode": ep + 1,
                 "model": args.model,
                 "network": args.network,
-                "demand": args.demand,
+                "demand": ep_demand_tag,
                 "seed": ep_seed,
                 "global_step": global_step,
                 "epsilon": round(result["epsilon"], 5),
@@ -226,20 +386,24 @@ def main() -> None:
                 summary,
                 model_name=model_cfg.display_name,
                 network=args.network,
-                demand_regime=args.demand,
+                demand_regime=ep_demand_tag,
                 seed=ep_seed,
             )
             append_csv_row(eval_rows_csv, EPISODE_SUMMARY_COLUMNS, eval_row)
 
             print(
-                f"[Ep {ep + 1:03d}/{args.episodes:03d}] {args.model} ({args.network}/{args.demand}) | "
+                f"[Ep {ep + 1:03d}/{args.episodes:03d}] {args.model} ({args.network}/{ep_demand_tag}) | "
                 f"R={ep_reward:8.2f} | Loss={result['mean_loss']:.4f} | "
                 f"Delay={summary['avg_vehicle_delay_s_per_veh']:.2f}s | "
                 f"MaxWait={summary['max_lane_wait_s']:.1f}s | "
-                f"Thru={summary['throughput_veh_per_hr']:.1f}/hr | ({wall_s:.1f}s)"
+                f"Thru={summary['throughput_veh_per_hr']:.1f}/hr | ({wall_s:.1f}s)",
+                flush=True,
             )
     finally:
-        env.close()
+        if env is not None:
+            env.close()
+        if tmp_dir is not None:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
 if __name__ == "__main__":
